@@ -20,6 +20,7 @@ class Convert(PatchedCommand):
         {--b|mask-background-color=?0 : Optional, the background color used for the mask. Must be between 0-255.}
         {--c|convert-original-dicom=?true : Optional, convert the original dicom to nii}
         {--a|xy-scaling-factor=?1 : Optional, Increase pixel density with this factor in xy. Must be 1 or more}
+        {--t|threads=?1 : Optional, Number of threads}
     """
     def handle(self):
         rtstruct_file = self.option('rtstruct')
@@ -38,6 +39,8 @@ class Convert(PatchedCommand):
         series_id = self.option('series-id')
 
         xy_scaling_factor = int(self.option('xy-scaling-factor'))
+        
+        threads = int(self.option('threads'))
 
         if structures:
             structures = [x.strip() for x in structures.split(',')]
@@ -50,8 +53,12 @@ class Convert(PatchedCommand):
             logging.error('xy_scaling_factor must be a positive integer')
             return -1
 
+        if threads < 1:
+            logging.error('Threads must be a positive integer')
+            return -1
+
         try:
             dcmrtstruct2nii(rtstruct_file, dicom_file, output_path, structures, gzip, mask_background, mask_foreground, convert_original_dicom, series_id,
-                            xy_scaling_factor=xy_scaling_factor)
+                            xy_scaling_factor=xy_scaling_factor, threads=threads)
         except (InvalidFileFormatException, PathDoesNotExistException, UnsupportedTypeException, ValueError,) as e:
             logging.error(str(e))

@@ -1,4 +1,6 @@
+import copy
 import logging
+from multiprocessing.pool import ThreadPool
 import os.path
 
 from dcmrtstruct2nii.adapters.convert.filenameconverter import FilenameConverter
@@ -23,7 +25,6 @@ def list_rt_structs(rtstruct_file):
     rtstructs = rtreader.ingest(rtstruct_file, True)
     return [struct['name'] for struct in rtstructs]
 
-
 def dcmrtstruct2nii(rtstruct_file,
                     dicom_file,
                     output_path,
@@ -33,7 +34,8 @@ def dcmrtstruct2nii(rtstruct_file,
                     mask_foreground_value=255,
                     convert_original_dicom=True,
                     series_id=None,  # noqa: C901 E501
-                    xy_scaling_factor=1):
+                    xy_scaling_factor=1,
+                    threads=1):
     """
     Converts A DICOM and DICOM RT Struct file to nii
 
@@ -64,6 +66,9 @@ def dcmrtstruct2nii(rtstruct_file,
     if mask_foreground_value < 0 or mask_foreground_value > 255:
         raise ValueError(f'Invalid value for mask_foreground_value: {mask_foreground_value}, must be between 0 and 255')
 
+    if threads <= 0:
+        raise ValueError(f'Threads must be a positive integer')
+
     if structures is None:
         structures = []
 
@@ -77,28 +82,40 @@ def dcmrtstruct2nii(rtstruct_file,
 
     dcm_patient_coords_to_mask = DcmPatientCoords2Mask()
     nii_output_adapter = NiiOutputAdapter()
-    for rtstruct in rtstructs:
+
+    if convert_original_dicom:
+        logging.info('Converting original DICOM to nii')
+
+        nii_output_adapter.write(dicom_image, f'{output_path}image', gzip)
+
+
+    def convert(rtstruct):
+        rtstruct = copy.deepcopy(rtstruct)
         if len(structures) == 0 or rtstruct['name'] in structures:
             if 'sequence' not in rtstruct:
                 logging.info('Skipping mask {} no shape/polygon found'.format(rtstruct['name']))
-                continue
+                return
 
             logging.info('Working on mask {}'.format(rtstruct['name']))
             try:
                 mask = dcm_patient_coords_to_mask.convert(rtstruct['sequence'],
-                                                          dicom_image,
-                                                          mask_background_value,
-                                                          mask_foreground_value,
-                                                          xy_scaling_factor=xy_scaling_factor)
+                                                            dicom_image,
+                                                            mask_background_value,
+                                                            mask_foreground_value,
+                                                            xy_scaling_factor=xy_scaling_factor)
             except ContourOutOfBoundsException:
                 logging.warning(f'Structure {rtstruct["name"]} is out of bounds, ignoring contour!')
-                continue
+                return
 
             mask_filename = filename_converter.convert(f'mask_{rtstruct["name"]}')
             nii_output_adapter.write(mask, f'{output_path}{mask_filename}', gzip)
 
-    if convert_original_dicom:
-        logging.info('Converting original DICOM to nii')
-        nii_output_adapter.write(dicom_image, f'{output_path}image', gzip)
+
+    
+    print(f'Converting contours in {threads}')
+    t = ThreadPool(threads)
+    t.map(convert, rtstructs)
+    t.close()
+    t.join()
 
     logging.info('Success!')
